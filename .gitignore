@@ -1,0 +1,27 @@
+# Build artifacts
+build/
+cmake-build-*/
+
+# Compiled shaders
+*.spv
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / editor
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+*.swp
+*.swo
+*~
+
+# CMake tooling
+compile_commands.json
+CMakeUserPresets.json
+
+# Environment
+.env
