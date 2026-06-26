@@ -13,7 +13,8 @@ namespace book {
 SDL_GPUShader* loadShader(SDL_GPUDevice* device,
                           const char* spvFilename,
                           SDL_ShaderCross_ShaderStage stage,
-                          Uint32 numUniformBuffers) {
+                          Uint32 numUniformBuffers,
+                          Uint32 numSamplers) {
     // Compiled shaders live in `shaders/` next to the executable (the build
     // copies them there). SDL_GetBasePath() makes this independent of CWD.
     const char* base = SDL_GetBasePath();
@@ -34,10 +35,10 @@ SDL_GPUShader* loadShader(SDL_GPUDevice* device,
     info.shader_stage = stage;
     info.props = 0;
 
-    // ...and the resources it binds. Everything but uniform buffers is zero for
-    // this app (no textures/samplers/storage).
+    // ...and the resources it binds. The fragment stage declares one combined
+    // image sampler (the base-color texture); storage resources are unused.
     SDL_ShaderCross_GraphicsShaderResourceInfo resources{};
-    resources.num_samplers = 0;
+    resources.num_samplers = numSamplers;
     resources.num_storage_textures = 0;
     resources.num_storage_buffers = 0;
     resources.num_uniform_buffers = numUniformBuffers;

@@ -51,8 +51,11 @@ bool Book::build(SDL_GPUDevice* device) {
     return true;
 }
 
-void Book::appendInstances(std::vector<Instance>& out) const {
-    out.insert(out.end(), parts_.begin(), parts_.end());
+void Book::appendInstances(std::vector<Instance>& out, SDL_GPUTexture* whiteTexture) const {
+    for (Instance part : parts_) {
+        part.texture = whiteTexture;
+        out.push_back(part);
+    }
 }
 
 void Book::destroy(SDL_GPUDevice* device) {

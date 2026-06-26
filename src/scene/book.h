@@ -26,8 +26,10 @@ public:
     bool build(SDL_GPUDevice* device);
     void destroy(SDL_GPUDevice* device);
 
-    // Append the book's own parts (cover/pages/spine) to a render list.
-    void appendInstances(std::vector<Instance>& out) const;
+    // Append the book's own parts (cover/pages/spine) to a render list. The book
+    // is untextured, so each appended instance is stamped with `whiteTexture`
+    // (the shared fallback) to satisfy the renderer's per-instance texture bind.
+    void appendInstances(std::vector<Instance>& out, SDL_GPUTexture* whiteTexture) const;
 
     const PageRect& leftPage() const { return left_; }
     const PageRect& rightPage() const { return right_; }

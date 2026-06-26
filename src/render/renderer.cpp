@@ -65,21 +65,24 @@ bool Renderer::createPipeline() {
     SDL_GPUShader* vs = loadShader(device_, "scene.vert.spv",
                                    SDL_SHADERCROSS_SHADERSTAGE_VERTEX, /*ubos=*/1);
     if (!vs) return false;
+    // The fragment shader declares one combined image sampler (the base-color
+    // texture) and no uniform buffers.
     SDL_GPUShader* fs = loadShader(device_, "scene.frag.spv",
-                                   SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT, /*ubos=*/0);
+                                   SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT,
+                                   /*ubos=*/0, /*samplers=*/1);
     if (!fs) {
         SDL_ReleaseGPUShader(device_, vs);
         return false;
     }
 
-    // Vertex layout: one interleaved buffer of {vec3 pos; vec3 normal}.
+    // Vertex layout: one interleaved buffer of {vec3 pos; vec3 normal; vec2 uv}.
     SDL_GPUVertexBufferDescription vbDesc{};
     vbDesc.slot = 0;
     vbDesc.pitch = sizeof(Vertex);
     vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
     vbDesc.instance_step_rate = 0;
 
-    SDL_GPUVertexAttribute attrs[2]{};
+    SDL_GPUVertexAttribute attrs[3]{};
     attrs[0].location = 0;
     attrs[0].buffer_slot = 0;
     attrs[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
@@ -88,6 +91,10 @@ bool Renderer::createPipeline() {
     attrs[1].buffer_slot = 0;
     attrs[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
     attrs[1].offset = offsetof(Vertex, normal);
+    attrs[2].location = 2;
+    attrs[2].buffer_slot = 0;
+    attrs[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+    attrs[2].offset = offsetof(Vertex, uv);
 
     SDL_GPUColorTargetDescription colorTarget{};
     colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device_, window_);
@@ -100,11 +107,13 @@ bool Renderer::createPipeline() {
     pci.vertex_input_state.vertex_buffer_descriptions = &vbDesc;
     pci.vertex_input_state.num_vertex_buffers = 1;
     pci.vertex_input_state.vertex_attributes = attrs;
-    pci.vertex_input_state.num_vertex_attributes = 2;
+    pci.vertex_input_state.num_vertex_attributes = 3;
 
-    // Cull back faces; generators wind front faces counter-clockwise.
+    // No back-face culling: external models can have arbitrary face winding, so
+    // we render both sides and let depth testing resolve occlusion. The fragment
+    // shader flips the normal toward the viewer on back faces so they stay lit.
     pci.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-    pci.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+    pci.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
     pci.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
 
     // Standard "closer fragments win" depth testing.
@@ -184,6 +193,13 @@ void Renderer::recordScene(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* color,
         ubo.model = inst.model;
         ubo.color = glm::vec4(inst.color, 1.0f);
         SDL_PushGPUVertexUniformData(cmd, 0, &ubo, sizeof(ubo));
+
+        // Bind this instance's base-color texture (the shared white texture for
+        // untextured objects) with the scene's shared sampler.
+        SDL_GPUTextureSamplerBinding texBind{};
+        texBind.texture = inst.texture;
+        texBind.sampler = scene.sampler();
+        SDL_BindGPUFragmentSamplers(pass, 0, &texBind, 1);
 
         SDL_GPUBufferBinding vb{};
         vb.buffer = inst.mesh->vertexBuffer();

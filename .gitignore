@@ -25,3 +25,7 @@ CMakeUserPresets.json
 
 # Environment
 .env
+
+# Screenshot output (see --screenshot in the README)
+/out.bmp
+/out.png

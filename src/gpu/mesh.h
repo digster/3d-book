@@ -14,12 +14,15 @@
 
 namespace book {
 
-// One vertex: position + normal. Color is *per object* (supplied through the
-// uniform block), not per vertex, so a single mesh can be reused by many
-// instances with different colors.
+// One vertex: position + normal + texture coordinate. Color is *per object*
+// (supplied through the uniform block), not per vertex, so a single mesh can be
+// reused by many instances. The uv is used to sample a base-color texture; for
+// untextured objects a 1x1 white texture is bound so the uv has no visible
+// effect and the per-object color shows through unchanged.
 struct Vertex {
     glm::vec3 pos;
     glm::vec3 normal;
+    glm::vec2 uv;
 };
 
 // CPU-side mesh: an indexed triangle list. Pure data — safe to build and test
@@ -33,15 +36,11 @@ struct MeshData {
     float minY() const;
 };
 
-// --- Procedural primitive generators --------------------------------------
-// All are centered on the local origin and wound so that front faces are
-// counter-clockwise when viewed from outside (matches the pipeline's cull
-// state). Normals are per-face for the box/pyramid and analytic for the curved
-// surfaces.
+// --- Procedural box generator ---------------------------------------------
+// Centered on the local origin with per-face normals. This is what the book
+// (cover/pages/spine) is built from; staged models now come from external files
+// (see io/model_loader.h) rather than procedural primitives.
 MeshData makeBox(float width, float height, float depth);
-MeshData makePyramid(float baseSize, float height);
-MeshData makeUVSphere(float radius, int sectors, int rings);
-MeshData makeTorus(float majorRadius, float minorRadius, int majorSeg, int minorSeg);
 
 // GPU-resident mesh: vertex buffer + index buffer + index count. Owns its GPU
 // buffers; call destroy() with the owning device before the device is gone.
@@ -70,11 +69,15 @@ private:
     uint32_t       indexCount_   = 0;
 };
 
-// A single thing to draw: which mesh, where (model matrix), and what color.
+// A single thing to draw: which mesh, where (model matrix), its color tint, and
+// the base-color texture to sample. `texture` is never null at draw time — the
+// book parts and untextured models point at the scene's shared 1x1 white
+// texture, which leaves `color` as the visible color.
 struct Instance {
-    const Mesh* mesh;
-    glm::mat4   model;
-    glm::vec3   color;
+    const Mesh*    mesh;
+    glm::mat4      model;
+    glm::vec3      color;
+    SDL_GPUTexture* texture = nullptr;
 };
 
 } // namespace book

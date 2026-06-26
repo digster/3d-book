@@ -41,13 +41,19 @@ pkg_get_variable(SHADERCROSS_LIBDIR sdl3-shadercross libdir)
 add_library(book_core STATIC
     src/gpu/mesh.cpp
     src/gpu/shader.cpp
+    src/gpu/texture.cpp
+    src/io/model_loader.cpp
     src/scene/camera.cpp
     src/scene/book.cpp
     src/scene/scene.cpp
     src/render/renderer.cpp
+    src/third_party_impl.cpp
 )
 
-target_include_directories(book_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(book_core PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party
+)
 
 target_link_libraries(book_core PUBLIC
     PkgConfig::SDL3
@@ -70,6 +76,11 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(book_core PUBLIC -Wall -Wextra)
 endif()
+
+# The vendored single-header libraries (compiled in third_party_impl.cpp) are not
+# our code and trip -Wall/-Wextra; silence just that one TU so our own warnings
+# stay visible and meaningful.
+set_source_files_properties(src/third_party_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
 # --- Application executable ------------------------------------------------
 add_executable(3d_book src/main.cpp)
@@ -105,6 +116,18 @@ endforeach()
 # binary, so the runtime resolves them via SDL_GetBasePath() + "shaders/...".
 add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 add_dependencies(3d_book shaders)
+
+# --- Model assets ----------------------------------------------------------
+# External 3D models are loaded at runtime from a `models/` directory next to
+# the executable (resolved via SDL_GetBasePath() + "models/"). Mirror the shader
+# layout by copying the source-tree `models/` into the build dir on every build,
+# so dropping a new file in models/ and rebuilding makes it appear in the app.
+add_custom_target(model_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/models ${CMAKE_BINARY_DIR}/models
+    COMMENT "Copying model assets -> build/models/"
+)
+add_dependencies(3d_book model_assets)
 
 # --- Tests -----------------------------------------------------------------
 enable_testing()

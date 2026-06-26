@@ -11,10 +11,12 @@ namespace book {
 // Load `<exe dir>/shaders/<spvFilename>`, transpile it to the device's native
 // shader format, and create an SDL_GPUShader. The resource counts describe the
 // bindings the shader declares (we pass them explicitly since we author the
-// shaders ourselves). Returns nullptr (and logs) on failure.
+// shaders ourselves): `numUniformBuffers` for uniform blocks and `numSamplers`
+// for combined image samplers. Returns nullptr (and logs) on failure.
 SDL_GPUShader* loadShader(SDL_GPUDevice* device,
                           const char* spvFilename,
                           SDL_ShaderCross_ShaderStage stage,
-                          Uint32 numUniformBuffers);
+                          Uint32 numUniformBuffers,
+                          Uint32 numSamplers = 0);
 
 } // namespace book

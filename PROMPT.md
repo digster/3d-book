@@ -9,3 +9,11 @@ A running log of the prompts that shaped this project.
 - I should be able to place 3D models on these pages. For now, just place some
   random 3D models on these pages.
 - Build it using SDL3 and any other required libraries in c++.
+
+## 2026-06-25 — External 3D models
+
+- Enable adding external 3D models.
+- (clarified) Support both OBJ and glTF; external libraries are fine. The
+  renderer should support textures. The existing procedural primitives were only
+  a proof of concept — replace them. For now, load models from a `models/`
+  directory (richer discovery comes later).

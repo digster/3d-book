@@ -19,13 +19,15 @@ layout(set = 1, binding = 0) uniform UBO {
 } ubo;
 
 // Interleaved vertex attributes (see Vertex in src/gpu/mesh.h):
-//   location 0 = position, location 1 = normal.
+//   location 0 = position, location 1 = normal, location 2 = texcoord.
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
 
 // Outputs handed to the fragment stage (interpolated across the triangle).
 layout(location = 0) out vec3 vNormal;  // world-space normal
 layout(location = 1) out vec3 vColor;   // object color, flat per object
+layout(location = 2) out vec2 vUV;      // texture coordinate
 
 void main() {
     gl_Position = ubo.mvp * vec4(inPos, 1.0);
@@ -35,4 +37,5 @@ void main() {
     // needing a separate inverse-transpose normal matrix.
     vNormal = mat3(ubo.model) * inNormal;
     vColor  = ubo.color.rgb;
+    vUV     = inUV;
 }
