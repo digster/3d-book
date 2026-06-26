@@ -31,6 +31,8 @@ struct AppState {
     long maxFrames = -1;               // --frames N: exit after N frames (-1 = forever)
     long frame = 0;
     const char* screenshotPath = nullptr; // --screenshot PATH: save one frame + exit
+    const char* scenePath = nullptr;      // --scene PATH: load a specific book file
+    long startSceneIndex = 0;             // --scene-index N: open on spread N
 };
 
 // Keep the camera's aspect ratio in sync with the (possibly resized) window.
@@ -38,6 +40,20 @@ void updateAspect(AppState* st) {
     int w = 0, h = 0;
     SDL_GetWindowSize(st->renderer.window(), &w, &h);
     if (h > 0) st->camera.setAspect(static_cast<float>(w) / static_cast<float>(h));
+}
+
+// Reflect the current scene (page spread) in the window title so flipping pages
+// gives visible feedback: "3d-book — <scene name> (i/N)".
+void updateTitle(AppState* st) {
+    char title[256];
+    if (st->scene.sceneCount() == 0) {
+        SDL_snprintf(title, sizeof(title), "3d-book — (no scenes)");
+    } else {
+        SDL_snprintf(title, sizeof(title), "3d-book — %s (%d/%d)",
+                     st->scene.currentSceneName().c_str(),
+                     st->scene.currentScene() + 1, st->scene.sceneCount());
+    }
+    SDL_SetWindowTitle(st->renderer.window(), title);
 }
 
 } // namespace
@@ -58,18 +74,26 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
             st->maxFrames = std::atol(argv[++i]);
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             st->screenshotPath = argv[++i];
+        } else if (std::strcmp(argv[i], "--scene") == 0 && i + 1 < argc) {
+            st->scenePath = argv[++i];
+        } else if (std::strcmp(argv[i], "--scene-index") == 0 && i + 1 < argc) {
+            st->startSceneIndex = std::atol(argv[++i]);
         }
     }
 
     if (!st->renderer.init("3d-book — isometric staging", 1000, 720)) {
         return SDL_APP_FAILURE;
     }
-    if (!st->scene.build(st->renderer.device())) {
+    if (!st->scene.build(st->renderer.device(), st->scenePath ? st->scenePath : "")) {
         return SDL_APP_FAILURE;
     }
 
     st->camera.setTarget(st->scene.target());
     updateAspect(st);
+
+    // Open on the requested spread (clamped to range), then show it in the title.
+    st->scene.setScene(static_cast<int>(st->startSceneIndex));
+    updateTitle(st);
 
     // One-shot screenshot mode: render a single frame to a file and exit.
     if (st->screenshotPath) {
@@ -79,7 +103,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
         return ok ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
     }
 
-    SDL_Log("controls: left-drag = orbit, scroll = zoom, R = reseed models, Esc = quit");
+    SDL_Log("controls: left-drag = orbit, scroll = zoom, "
+            "left/right (or PgUp/PgDn) = flip scenes, Esc = quit");
     return SDL_APP_CONTINUE;
 }
 
@@ -91,8 +116,23 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* e) {
             return SDL_APP_SUCCESS;
 
         case SDL_EVENT_KEY_DOWN:
-            if (e->key.scancode == SDL_SCANCODE_ESCAPE) return SDL_APP_SUCCESS;
-            if (e->key.scancode == SDL_SCANCODE_R) st->scene.reseed();
+            // Flip between scenes (page spreads) like turning pages in a book.
+            switch (e->key.scancode) {
+                case SDL_SCANCODE_ESCAPE:
+                    return SDL_APP_SUCCESS;
+                case SDL_SCANCODE_RIGHT:
+                case SDL_SCANCODE_PAGEDOWN:
+                    st->scene.nextScene();
+                    updateTitle(st);
+                    break;
+                case SDL_SCANCODE_LEFT:
+                case SDL_SCANCODE_PAGEUP:
+                    st->scene.prevScene();
+                    updateTitle(st);
+                    break;
+                default:
+                    break;
+            }
             break;
 
         case SDL_EVENT_MOUSE_BUTTON_DOWN:

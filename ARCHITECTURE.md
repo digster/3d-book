@@ -14,7 +14,12 @@ renderer walks the scene and, for every instance, pushes a small uniform block
 (`mvp`, `model`, `color`), binds the instance's base-color texture, and issues an
 indexed draw. The **book geometry** is generated in code (`makeBox`); the
 **staged models** are loaded at startup from external files (OBJ / glTF) in the
-`models/` directory and normalized into the same page-placement system.
+`models/` directory and normalized into a common page-placement system. **What is
+placed where** comes from data: a `book.json` file (see `io/scene_loader.cpp`)
+holds an ordered list of *scenes* (page spreads), and the `Scene` renders one
+spread at a time, flipping between them on a key press — the rest of the pipeline
+is unchanged because a scene is just a different set of `{model, page, transform}`
+entries feeding the same instance list.
 
 ## Rendering pipeline: GLSL → SPIR-V → Metal
 
@@ -78,22 +83,25 @@ src/
     texture.*         Image decode (stb_image) + GPU Texture + shared sampler.
   io/
     model_loader.*    OBJ (tinyobjloader) + glTF (cgltf) -> ModelData; normalize.
+    scene_loader.*    book.json (nlohmann/json) -> BookData (scenes of objects).
   scene/
     camera.*          IsometricCamera: orthographic view/projection + orbit/zoom.
     book.*            Builds the book meshes and exposes the two page rectangles.
-    scene.*           Loads models/ into a registry; random placement; instances.
+    scene.*           Loads models/ + book.json; seats the current spread; instances.
   render/
     renderer.*        Device/window/depth/pipeline; per-frame draw of the scene.
 
-third_party/          Vendored: tiny_obj_loader.h, cgltf.h, stb_image.h.
+third_party/          Vendored: tiny_obj_loader.h, cgltf.h, stb_image.h, json.hpp.
 models/               Model files loaded at runtime (copied to build/models/).
+book.json             The scenes (page spreads), loaded at runtime (copied to build/).
 tools/                make_sample_models.py (regenerates the sample/test models).
 ```
 
 `book_core` (in `CMakeLists.txt`) is a static library containing everything
 except `main.cpp`. The app links it, and so does the test target — which lets
-the headless tests exercise the pure logic (box generator, camera math,
-placement, and the OBJ/glTF loaders + image decode) without the SDL entry point.
+the headless tests exercise the pure logic (box generator, camera math, page
+placement, the scene-file parser, and the OBJ/glTF loaders + image decode)
+without the SDL entry point.
 
 ## Data flow per frame
 
@@ -117,10 +125,11 @@ main.cpp (SDL_AppIterate)
 The book is intentionally built from axis-aligned boxes (`makeBox`): a dark
 cover, two cream "paper-stack" boxes whose **top faces are the pages**, and a
 dark spine. Because each page is a known axis-aligned rectangle (center,
-half-extents, top Y — see `PageRect` in `scene.h`), seating a model "on the
-page" is just: pick a random (x, z) inside the rectangle (with a margin) and set
-y so the model's base rests on the page top. Keeping the pages flat (no tilt)
-keeps that placement math trivial and the staging area usable.
+half-extents, top Y — see `PageRect` in `book.h`), seating a model "on the page"
+is just: map the authored page-relative `(u, v)` onto the rectangle (inset by the
+model footprint), and set y so the model's base rests on the page top. Keeping the
+pages flat (no tilt) keeps that placement math trivial and the staging area
+usable.
 
 ## Loading & normalizing external models
 
@@ -137,30 +146,49 @@ work (no GPU device), so the loaders are unit-tested headlessly.
 
 `Scene::build` enumerates `<exe dir>/models/` with `SDL_GlobDirectory`, loads
 each supported file into a runtime **registry** (`std::vector<Model>` of GPU
-sub-meshes + textures, plus a parallel `std::vector<ModelInfo>`), and uploads a
+sub-meshes + textures, plus a parallel `std::vector<ModelInfo>` and a
+`filename → index` map so `book.json` can reference models by name), and uploads a
 shared 1×1 white texture + sampler. If nothing loads, the book still renders.
 
-## Scene & determinism
+## Scenes: data-driven page spreads
 
-`generatePlacements(left, right, seed, models)` is a **pure function** (glm + std
-only, no GPU) that returns a list of `{modelIndex, model matrix}`, picking models
-at random from the registry. This is what the unit tests check (every placement
-lands within its page rect and rests on the surface). `Scene` expands each
-placement into one renderable `Instance` per sub-mesh of the chosen model
-(sharing the placement transform), binding each to its `Mesh` and base-color
-texture. Placement is seeded by `std::mt19937`; pressing `R` advances the seed
-and rebuilds the instances.
+A **scene** is one two-page spread: the book plus a list of objects placed on its
+pages. `io/scene_loader.cpp` parses `book.json` (nlohmann/json) into a `BookData`
+— an ordered `std::vector<SceneData>`, each a list of `ObjectPlacement`
+(`{model, page, position (u,v), rotationDeg, scale}`). Parsing is pure CPU work
+and deliberately forgiving: a malformed document or unsupported `version` yields
+`nullopt` (the app shows the bare book), and an individual bad object is skipped
+rather than failing the whole spread — so a typo never crashes the app. The
+parser is split into `loadBook(path)` (filesystem) and `parseBook(text)`
+(string), and the string form is what the unit tests exercise.
+
+The pure function `placeOnPage(page, uv, rotationDeg, scale, info)` (glm + std
+only, no GPU) turns one authored object into a seated world-space model matrix: it
+maps the page-relative `(u, v) ∈ [-1, 1]` across the `PageRect` (inset by the
+scaled footprint and clamped, so the object never hangs off the page), seats Y on
+the surface using the model's `halfHeight`, and applies a Y-axis rotation. The
+unit tests check exactly these invariants (center maps to `(0,0)`, corners stay on
+the page, the base rests on the surface at any scale).
+
+`Scene` holds the parsed `bookData_` and a `currentScene_` index. `nextScene` /
+`prevScene` / `setScene` clamp to `[0, sceneCount)` (a book doesn't wrap) and call
+`rebuildInstances`, which stamps the book parts then, for each object in the
+current spread, looks the model up by name, calls `placeOnPage`, and pushes one
+`Instance` per sub-mesh (sharing the transform). Switching scenes is therefore
+just rebuilding that flat list from a different spread; the renderer is untouched.
 
 ## Build & test workflow
 
 - `cmake -B build && cmake --build build` — the `shaders` target compiles GLSL →
-  SPIR-V and the `model_assets` target copies `models/` → `build/models/`, both
-  as part of the normal build.
+  SPIR-V, `model_assets` copies `models/` → `build/models/`, and `scene_assets`
+  copies `book.json` → `build/book.json`, all as part of the normal build.
 - `./build/3d_book --frames N` — renders N frames and exits; the NULL-swapchain
   guard keeps this valid even with no visible window, which makes it a good
   smoke test for the device/pipeline/shader/texture path.
 - `./build/3d_book --screenshot out.bmp` — renders one frame offscreen to a BMP;
   the best end-to-end check that loaded models appear textured and seated.
+  Combine with `--scene PATH` / `--scene-index N` to screenshot a specific spread.
 - `ctest --test-dir build` — `tests/test_geometry.cpp` validates the box
-  generator, camera matrices, placement bounds, and the OBJ/glTF loaders +
-  image decode (using the fixtures in `tests/assets/`) with no GPU involved.
+  generator, camera matrices, `placeOnPage` seating/bounds, the `parseBook` scene
+  parser (valid, partial, and malformed inputs), and the OBJ/glTF loaders + image
+  decode (using the fixtures in `tests/assets/`) with no GPU involved.

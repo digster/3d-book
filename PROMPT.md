@@ -17,3 +17,17 @@ A running log of the prompts that shaped this project.
   renderer should support textures. The existing procedural primitives were only
   a proof of concept — replace them. For now, load models from a `models/`
   directory (richer discovery comes later).
+
+## 2026-06-25 — Data-driven scenes (page spreads)
+
+- The two pages and the objects on the pages along with their specific positions
+  should each constitute a scene.
+- New pages constitute new scenes, like the content on new pages in a normal book.
+- All this scene data should be backed by some data format, which the application
+  processes and renders. We should be able to switch between the different pages
+  (scenes).
+- Decide on this data format file before proceeding.
+- (decided with the user) Format: **JSON via nlohmann/json** (vendored single
+  header). Layout: a **single `book.json`** with an ordered `scenes` array.
+  Positioning: **page-relative `(u,v)` + auto-seat**. The previous random
+  placement is **replaced entirely** (purely data-driven).

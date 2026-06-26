@@ -1,5 +1,7 @@
 //
-// scene.cpp — load external models from disk and scatter them on the book pages.
+// scene.cpp — load external models from disk and stage them on the book pages
+// according to the authored scenes in book.json. Switching scenes re-selects
+// which spread's objects feed the flat render list.
 //
 #include "scene/scene.h"
 
@@ -11,7 +13,6 @@
 #include <algorithm>
 #include <cstring>
 #include <optional>
-#include <random>
 #include <string>
 
 namespace book {
@@ -30,49 +31,32 @@ bool isModelFile(const std::string& name) {
 }
 } // namespace
 
-std::vector<Placement> generatePlacements(const PageRect& left, const PageRect& right,
-                                          uint32_t seed, const std::vector<ModelInfo>& models) {
-    std::vector<Placement> out;
-    if (models.empty()) return out;
+glm::mat4 placeOnPage(const PageRect& page, glm::vec2 uv, float rotationDeg,
+                      float scale, const ModelInfo& info) {
+    // Inset the page rectangle by the (scaled) footprint plus a small margin so an
+    // object at the edge (u/v = ±1) still rests fully on the page. Clamp uv so an
+    // out-of-range authored position can't push the object off the surface.
+    float foot = info.footprintRadius * scale + 0.04f;
+    float availX = std::max(0.0f, page.halfX - foot);
+    float availZ = std::max(0.0f, page.halfZ - foot);
 
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
-    std::uniform_int_distribution<int> modelDist(0, static_cast<int>(models.size()) - 1);
-    std::uniform_int_distribution<int> countDist(4, 6);
+    float u = std::clamp(uv.x, -1.0f, 1.0f);
+    float v = std::clamp(uv.y, -1.0f, 1.0f);
+    float x = page.center.x + u * availX;
+    float z = page.center.z + v * availZ;
+    float ty = page.topY + info.halfHeight * scale; // seat base on the page surface
 
-    const PageRect pages[2] = {left, right};
-    for (const PageRect& page : pages) {
-        int n = countDist(rng);
-        for (int i = 0; i < n; ++i) {
-            int idx = modelDist(rng);
-            const ModelInfo& info = models[idx];
+    float angle = glm::radians(rotationDeg);
 
-            float scale = 0.7f + u01(rng) * 0.6f;          // [0.7, 1.3]
-            float foot = info.footprintRadius * scale + 0.04f;
-
-            // Inset the spawn rectangle by the footprint so the model stays on
-            // the page (clamped to 0 in case a big model barely fits).
-            float availX = std::max(0.0f, page.halfX - foot);
-            float availZ = std::max(0.0f, page.halfZ - foot);
-            float x = page.center.x + (u01(rng) * 2.0f - 1.0f) * availX;
-            float z = page.center.z + (u01(rng) * 2.0f - 1.0f) * availZ;
-            float ty = page.topY + info.halfHeight * scale; // seat base on the page
-
-            float angle = u01(rng) * 6.28318530718f;
-
-            // model = T * R * S (applied right-to-left: scale, then rotate, then
-            // translate). Y-rotation keeps the footprint flat on the page.
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x, ty, z));
-            model = glm::rotate(model, angle, glm::vec3(0.0f, 1.0f, 0.0f));
-            model = glm::scale(model, glm::vec3(scale));
-
-            out.push_back({idx, model});
-        }
-    }
-    return out;
+    // model = T * R * S (applied right-to-left: scale, then rotate, then
+    // translate). Y-rotation keeps the footprint flat on the page.
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x, ty, z));
+    model = glm::rotate(model, angle, glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(scale));
+    return model;
 }
 
-bool Scene::build(SDL_GPUDevice* device) {
+bool Scene::build(SDL_GPUDevice* device, const std::string& scenePath) {
     if (!book_.build(device)) return false;
 
     // The shared white texture + sampler back the "always sample a base-color
@@ -84,8 +68,11 @@ bool Scene::build(SDL_GPUDevice* device) {
     loadModelsFromDir(device); // non-fatal: an empty registry just means bare pages
     if (models_.empty()) {
         SDL_Log("No external models loaded — drop .obj/.gltf/.glb files in models/ "
-                "(next to the executable). Showing the empty book.");
+                "(next to the executable). Scenes referencing them will be skipped.");
     }
+
+    loadBookFile(scenePath); // non-fatal: a missing/bad book just shows the bare book
+    currentScene_ = 0;
 
     rebuildInstances();
     return true;
@@ -140,8 +127,11 @@ bool Scene::loadModelsFromDir(SDL_GPUDevice* device) {
         if (gpu.submeshes.empty()) continue;
 
         const ModelInfo info = gpu.info;
+        const int index = static_cast<int>(models_.size());
         models_.push_back(std::move(gpu));
         modelInfos_.push_back(info);
+        // Key the registry by filename so book.json can reference models by name.
+        modelByName_[name] = index;
         SDL_Log("loaded model: %s (%zu sub-mesh(es))", name.c_str(),
                 models_.back().submeshes.size());
     }
@@ -150,26 +140,66 @@ bool Scene::loadModelsFromDir(SDL_GPUDevice* device) {
     return !models_.empty();
 }
 
+void Scene::loadBookFile(const std::string& scenePath) {
+    std::string path = scenePath;
+    if (path.empty()) {
+        const char* base = SDL_GetBasePath();
+        path = std::string(base ? base : "") + "book.json";
+    }
+
+    if (auto bk = loadBook(path)) {
+        bookData_ = std::move(*bk);
+        SDL_Log("loaded book '%s' (%d scene(s)) from %s", bookData_.title.c_str(),
+                static_cast<int>(bookData_.scenes.size()), path.c_str());
+    } else {
+        SDL_Log("no usable book at %s — showing the bare book", path.c_str());
+        bookData_ = BookData{};
+    }
+}
+
 void Scene::rebuildInstances() {
     instances_.clear();
     // Book parts are untextured: stamp them with the shared white texture so the
     // renderer's per-instance sampler binding always has a valid texture.
     book_.appendInstances(instances_, whiteTexture_.handle());
 
-    if (models_.empty()) return;
+    if (currentScene_ < 0 || currentScene_ >= static_cast<int>(bookData_.scenes.size()))
+        return;
 
-    auto placements = generatePlacements(book_.leftPage(), book_.rightPage(), seed_, modelInfos_);
-    for (const Placement& p : placements) {
-        const Model& m = models_[p.modelIndex];
-        for (const GpuSubMesh& sm : m.submeshes)
-            instances_.push_back({&sm.mesh, p.model, sm.tint, sm.texture});
+    const SceneData& scene = bookData_.scenes[currentScene_];
+    for (const ObjectPlacement& obj : scene.objects) {
+        auto it = modelByName_.find(obj.model);
+        if (it == modelByName_.end()) {
+            SDL_Log("scene '%s': model '%s' not loaded — skipping",
+                    scene.name.c_str(), obj.model.c_str());
+            continue;
+        }
+        const int idx = it->second;
+        const PageRect& page = (obj.page == PageSide::Left) ? book_.leftPage() : book_.rightPage();
+        const glm::mat4 m = placeOnPage(page, obj.position, obj.rotationDeg, obj.scale,
+                                        modelInfos_[idx]);
+        for (const GpuSubMesh& sm : models_[idx].submeshes)
+            instances_.push_back({&sm.mesh, m, sm.tint, sm.texture});
     }
 }
 
-void Scene::reseed() {
-    // Advance via a simple LCG step so each press gives a visibly different roll.
-    seed_ = seed_ * 1664525u + 1013904223u;
+void Scene::setScene(int index) {
+    if (bookData_.scenes.empty()) return;
+    const int last = static_cast<int>(bookData_.scenes.size()) - 1;
+    const int clamped = std::max(0, std::min(index, last));
+    if (clamped == currentScene_) return; // already there (or flipping past an end)
+    currentScene_ = clamped;
     rebuildInstances();
+}
+
+void Scene::nextScene() { setScene(currentScene_ + 1); }
+void Scene::prevScene() { setScene(currentScene_ - 1); }
+
+const std::string& Scene::currentSceneName() const {
+    static const std::string kEmpty;
+    if (currentScene_ < 0 || currentScene_ >= static_cast<int>(bookData_.scenes.size()))
+        return kEmpty;
+    return bookData_.scenes[currentScene_].name;
 }
 
 void Scene::destroy(SDL_GPUDevice* device) {
@@ -185,8 +215,11 @@ void Scene::destroy(SDL_GPUDevice* device) {
 
     models_.clear();
     modelInfos_.clear();
+    modelByName_.clear();
     textures_.clear();
     instances_.clear();
+    bookData_ = BookData{};
+    currentScene_ = 0;
 }
 
 } // namespace book

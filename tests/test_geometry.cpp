@@ -9,6 +9,7 @@
 #include "gpu/mesh.h"
 #include "gpu/texture.h"
 #include "io/model_loader.h"
+#include "io/scene_loader.h"
 #include "scene/book.h"
 #include "scene/camera.h"
 #include "scene/scene.h"
@@ -88,48 +89,116 @@ static bool withinPage(const PageRect& page, float x, float z) {
            z <= page.center.z + page.halfZ + 1e-3f;
 }
 
-static void testPlacement() {
+// Pull translation / uniform scale back out of a model matrix for checking.
+static void decompose(const glm::mat4& m, float& x, float& y, float& z, float& scale) {
+    x = m[3][0];
+    y = m[3][1];
+    z = m[3][2];
+    scale = glm::length(glm::vec3(m[0])); // |scaled basis vector|
+}
+
+static void testScenePlacement() {
     // Page rectangles mirroring Book's layout.
     PageRect left{glm::vec3(-1.10f, 0.22f, 0.0f), 1.0f, 1.5f, 0.22f};
     PageRect right{glm::vec3(1.10f, 0.22f, 0.0f), 1.0f, 1.5f, 0.22f};
+    ModelInfo info{0.4f, 0.3f}; // halfHeight, footprintRadius
 
-    // A small registry of model seating info (as the scene would build it).
-    std::vector<ModelInfo> models = {{0.5f, 0.7f}, {0.3f, 0.45f}, {0.25f, 0.5f}};
-
-    auto placements = generatePlacements(left, right, 1337u, models);
-
-    // 4..6 models per page, two pages.
-    CHECK(placements.size() >= 8 && placements.size() <= 12);
-
-    for (const Placement& pl : placements) {
-        CHECK(finite4x4(pl.model));
-        CHECK(pl.modelIndex >= 0 && pl.modelIndex < static_cast<int>(models.size()));
-
-        float x = pl.model[3][0];
-        float y = pl.model[3][1];
-        float z = pl.model[3][2];
-        float scale = glm::length(glm::vec3(pl.model[0])); // |scaled basis vector|
-        float halfH = models[pl.modelIndex].halfHeight;
-
-        // Lands on one of the two pages...
-        CHECK(withinPage(left, x, z) || withinPage(right, x, z));
-
-        // ...and is seated so its base rests on the page top (y = 0.22).
-        float base = y - halfH * scale;
-        CHECK(std::fabs(base - 0.22f) < 1e-2f);
+    // (0,0) lands on the page center and seats the base on the surface.
+    {
+        glm::mat4 m = placeOnPage(left, glm::vec2(0.0f, 0.0f), 0.0f, 1.0f, info);
+        CHECK(finite4x4(m));
+        float x, y, z, scale;
+        decompose(m, x, y, z, scale);
+        CHECK(std::fabs(x - left.center.x) < 1e-4f);
+        CHECK(std::fabs(z - left.center.z) < 1e-4f);
+        CHECK(std::fabs(scale - 1.0f) < 1e-4f);
+        CHECK(std::fabs((y - info.halfHeight * scale) - left.topY) < 1e-4f); // base on surface
+        CHECK(withinPage(left, x, z));
     }
 
-    // Determinism: same seed -> identical result.
-    auto again = generatePlacements(left, right, 1337u, models);
-    CHECK(again.size() == placements.size());
-    bool identical = again.size() == placements.size();
-    for (size_t i = 0; i < again.size() && identical; ++i)
-        identical = again[i].modelIndex == placements[i].modelIndex &&
-                    again[i].model == placements[i].model;
-    CHECK(identical);
+    // Corner / edge positions and out-of-range values stay on the page (the
+    // footprint inset + clamp guarantee it) and stay seated, at any scale.
+    const glm::vec2 uvs[] = {{1, 1}, {-1, -1}, {1, -1}, {-1, 1}, {2.5f, -3.0f}};
+    const float scales[] = {0.5f, 1.0f, 1.5f};
+    for (const glm::vec2& uv : uvs) {
+        for (float s : scales) {
+            glm::mat4 m = placeOnPage(right, uv, 37.0f, s, info);
+            CHECK(finite4x4(m));
+            float x, y, z, scale;
+            decompose(m, x, y, z, scale);
+            CHECK(std::fabs(scale - s) < 1e-4f);
+            CHECK(withinPage(right, x, z));
+            CHECK(std::fabs((y - info.halfHeight * scale) - right.topY) < 1e-3f);
+        }
+    }
 
-    // No models -> no placements.
-    CHECK(generatePlacements(left, right, 1337u, {}).empty());
+    // Determinism: same inputs -> identical matrix.
+    glm::mat4 a = placeOnPage(left, glm::vec2(0.3f, -0.2f), 45.0f, 0.9f, info);
+    glm::mat4 b = placeOnPage(left, glm::vec2(0.3f, -0.2f), 45.0f, 0.9f, info);
+    CHECK(a == b);
+}
+
+static void testSceneLoader() {
+    // A well-formed book with two scenes exercising required + optional fields.
+    const std::string good = R"({
+        "version": 1,
+        "title": "Test Book",
+        "scenes": [
+            { "name": "One", "objects": [
+                { "model": "a.obj", "page": "left",  "position": [0.0, 0.0] },
+                { "model": "b.glb", "page": "RIGHT", "position": [0.5, -0.5], "rotation": 90, "scale": 0.5 }
+            ]},
+            { "name": "Two", "objects": [] }
+        ]
+    })";
+
+    auto book = parseBook(good);
+    CHECK(book.has_value());
+    if (book) {
+        CHECK(book->title == "Test Book");
+        CHECK(book->scenes.size() == 2);
+        CHECK(book->scenes[0].name == "One");
+        CHECK(book->scenes[0].objects.size() == 2);
+        CHECK(book->scenes[1].objects.empty());
+
+        const ObjectPlacement& o0 = book->scenes[0].objects[0];
+        CHECK(o0.model == "a.obj");
+        CHECK(o0.page == PageSide::Left);
+        CHECK(std::fabs(o0.position.x) < 1e-6f && std::fabs(o0.position.y) < 1e-6f);
+        CHECK(std::fabs(o0.rotationDeg) < 1e-6f);   // default
+        CHECK(std::fabs(o0.scale - 1.0f) < 1e-6f);  // default
+
+        const ObjectPlacement& o1 = book->scenes[0].objects[1];
+        CHECK(o1.page == PageSide::Right);          // case-insensitive
+        CHECK(std::fabs(o1.rotationDeg - 90.0f) < 1e-6f);
+        CHECK(std::fabs(o1.scale - 0.5f) < 1e-6f);
+    }
+
+    // A malformed object is skipped, but the rest of the book still parses.
+    const std::string partial = R"({
+        "version": 1,
+        "scenes": [ { "objects": [
+            { "model": "ok.obj", "page": "left", "position": [0, 0] },
+            { "page": "left", "position": [0, 0] },
+            { "model": "noPage.obj", "position": [0, 0] },
+            { "model": "badPos.obj", "page": "left", "position": [0] }
+        ]}]
+    })";
+    auto pb = parseBook(partial);
+    CHECK(pb.has_value());
+    if (pb) {
+        CHECK(pb->scenes.size() == 1);
+        CHECK(pb->scenes[0].objects.size() == 1); // only the valid object survives
+        CHECK(pb->scenes[0].objects[0].model == "ok.obj");
+    }
+
+    // Wrong / missing version is rejected outright.
+    CHECK(!parseBook(R"({ "version": 2, "scenes": [] })").has_value());
+    CHECK(!parseBook(R"({ "scenes": [] })").has_value());
+    // Malformed JSON fails gracefully (no throw, no value).
+    CHECK(!parseBook("{ this is not json").has_value());
+    // Missing scenes array.
+    CHECK(!parseBook(R"({ "version": 1 })").has_value());
 }
 
 // Combined AABB across all of a model's sub-meshes.
@@ -213,7 +282,8 @@ static void testLoaders() {
 int main() {
     testBoxGenerator();
     testCamera();
-    testPlacement();
+    testScenePlacement();
+    testSceneLoader();
     testLoaders();
 
     if (g_failures == 0) {

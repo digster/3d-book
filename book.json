@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "title": "Demo Book",
+  "scenes": [
+    {
+      "name": "Spread 1 — One per page",
+      "objects": [
+        { "model": "textured_cube.obj", "page": "left",  "position": [0.0, 0.0], "rotation": 0,  "scale": 1.0 },
+        { "model": "textured_cube.glb", "page": "right", "position": [0.0, 0.0], "rotation": 30, "scale": 1.0 }
+      ]
+    },
+    {
+      "name": "Spread 2 — Corners",
+      "objects": [
+        { "model": "textured_cube.glb", "page": "left",  "position": [-1.0, -1.0], "scale": 0.7 },
+        { "model": "textured_cube.glb", "page": "left",  "position": [ 1.0, -1.0], "scale": 0.7 },
+        { "model": "textured_cube.glb", "page": "left",  "position": [-1.0,  1.0], "scale": 0.7 },
+        { "model": "textured_cube.glb", "page": "left",  "position": [ 1.0,  1.0], "scale": 0.7 },
+        { "model": "textured_cube.obj", "page": "right", "position": [ 0.0,  0.0], "rotation": 45, "scale": 1.2 }
+      ]
+    },
+    {
+      "name": "Spread 3 — A scattered row",
+      "objects": [
+        { "model": "textured_cube.obj", "page": "left",  "position": [-0.5, -0.4], "rotation": 15, "scale": 0.8 },
+        { "model": "textured_cube.glb", "page": "left",  "position": [ 0.5,  0.4], "rotation": 60, "scale": 1.1 },
+        { "model": "textured_cube.glb", "page": "right", "position": [ 0.0, -0.6], "rotation": 0,  "scale": 0.9 },
+        { "model": "textured_cube.obj", "page": "right", "position": [ 0.3,  0.6], "rotation": 90, "scale": 1.0 }
+      ]
+    }
+  ]
+}

@@ -43,6 +43,7 @@ add_library(book_core STATIC
     src/gpu/shader.cpp
     src/gpu/texture.cpp
     src/io/model_loader.cpp
+    src/io/scene_loader.cpp
     src/scene/camera.cpp
     src/scene/book.cpp
     src/scene/scene.cpp
@@ -128,6 +129,17 @@ add_custom_target(model_assets ALL
     COMMENT "Copying model assets -> build/models/"
 )
 add_dependencies(3d_book model_assets)
+
+# --- Scene data ------------------------------------------------------------
+# The book of scenes (book.json) is loaded at runtime from next to the binary
+# (SDL_GetBasePath() + "book.json"). Copy it on every build like the models so an
+# edit to the source book.json shows up in the app after a rebuild.
+add_custom_target(scene_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/book.json ${CMAKE_BINARY_DIR}/book.json
+    COMMENT "Copying scene data -> build/book.json"
+)
+add_dependencies(3d_book scene_assets)
 
 # --- Tests -----------------------------------------------------------------
 enable_testing()
