@@ -30,9 +30,11 @@ struct AppState {
     bool dragging = false;             // left mouse button held -> orbiting
     long maxFrames = -1;               // --frames N: exit after N frames (-1 = forever)
     long frame = 0;
+    Uint64 lastTickNs = 0;             // timestamp of the previous frame, for delta-time
     const char* screenshotPath = nullptr; // --screenshot PATH: save one frame + exit
     const char* scenePath = nullptr;      // --scene PATH: load a specific book file
     long startSceneIndex = 0;             // --scene-index N: open on spread N
+    float turnPreview = -1.0f;            // --turn-preview T: pose a forward page-turn at T in [0,1]
 };
 
 // Keep the camera's aspect ratio in sync with the (possibly resized) window.
@@ -51,7 +53,7 @@ void updateTitle(AppState* st) {
     } else {
         SDL_snprintf(title, sizeof(title), "3d-book — %s (%d/%d)",
                      st->scene.currentSceneName().c_str(),
-                     st->scene.currentScene() + 1, st->scene.sceneCount());
+                     st->scene.displayScene() + 1, st->scene.sceneCount());
     }
     SDL_SetWindowTitle(st->renderer.window(), title);
 }
@@ -78,6 +80,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
             st->scenePath = argv[++i];
         } else if (std::strcmp(argv[i], "--scene-index") == 0 && i + 1 < argc) {
             st->startSceneIndex = std::atol(argv[++i]);
+        } else if (std::strcmp(argv[i], "--turn-preview") == 0 && i + 1 < argc) {
+            st->turnPreview = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -94,6 +98,13 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     // Open on the requested spread (clamped to range), then show it in the title.
     st->scene.setScene(static_cast<int>(st->startSceneIndex));
     updateTitle(st);
+
+    // Optionally freeze a page-turn mid-flip so a screenshot can capture it
+    // deterministically (used for headless visual checks of the animation).
+    if (st->turnPreview >= 0.0f) {
+        st->scene.poseTurn(+1, st->turnPreview);
+        updateTitle(st);
+    }
 
     // One-shot screenshot mode: render a single frame to a file and exit.
     if (st->screenshotPath) {
@@ -169,6 +180,16 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* e) {
 SDL_AppResult SDL_AppIterate(void* appstate) {
     AppState* st = static_cast<AppState*>(appstate);
 
+    // Delta-time since the previous frame, in seconds. Clamp it so the first
+    // frame (lastTickNs == 0) and any hitch (window drag, breakpoint) can't
+    // teleport an in-progress page-turn — it just advances by at most 0.1 s.
+    const Uint64 now = SDL_GetTicksNS();
+    float dt = st->lastTickNs == 0 ? 0.0f
+                                   : static_cast<float>(now - st->lastTickNs) / 1.0e9f;
+    st->lastTickNs = now;
+    if (dt > 0.1f) dt = 0.1f;
+
+    st->scene.update(dt); // advance any in-progress page-turn before drawing
     if (!st->renderer.draw(st->scene, st->camera)) return SDL_APP_FAILURE;
 
     if (st->maxFrames >= 0 && ++st->frame >= st->maxFrames) return SDL_APP_SUCCESS;

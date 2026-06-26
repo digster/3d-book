@@ -11,6 +11,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -18,6 +19,11 @@
 namespace book {
 
 namespace {
+constexpr float kPi = 3.14159265358979323846f;
+// Peak page-curl curvature (1/radius) at mid-turn. Tuned for a gentle paper bow
+// across the leaf's length; larger = a tighter curl.
+constexpr float kCurlMax = 0.5f;
+
 // True if `name` ends with one of the model extensions we can load.
 bool isModelFile(const std::string& name) {
     std::string lower = name;
@@ -54,6 +60,30 @@ glm::mat4 placeOnPage(const PageRect& page, glm::vec2 uv, float rotationDeg,
     model = glm::rotate(model, angle, glm::vec3(0.0f, 1.0f, 0.0f));
     model = glm::scale(model, glm::vec3(scale));
     return model;
+}
+
+// --- Page-turn math (pure) -------------------------------------------------
+float pageTurnEase(float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t); // smoothstep: 0 and 1 derivatives at the ends
+}
+
+float pageTurnAngleDeg(float e, int dir) {
+    // Forward sweeps 0 -> 180deg; backward is the mirror so the leaf comes from
+    // the opposite side, reusing the same +X leaf mesh.
+    return dir >= 0 ? 180.0f * e : 180.0f * (1.0f - e);
+}
+
+float pageTurnCurvature(float t, float kMax) {
+    // sin(pi*t) is 0 at t=0/1 (page flat when grabbed and when laid down) and
+    // peaks at t=0.5 (most curled at the top of the lift).
+    return kMax * std::sin(kPi * std::clamp(t, 0.0f, 1.0f));
+}
+
+glm::mat4 leafTransform(float angleDeg, float hingeY) {
+    glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, hingeY, 0.0f));
+    m = glm::rotate(m, glm::radians(angleDeg), glm::vec3(0.0f, 0.0f, 1.0f));
+    return m;
 }
 
 bool Scene::build(SDL_GPUDevice* device, const std::string& scenePath) {
@@ -157,21 +187,18 @@ void Scene::loadBookFile(const std::string& scenePath) {
     }
 }
 
-void Scene::rebuildInstances() {
-    instances_.clear();
-    // Book parts are untextured: stamp them with the shared white texture so the
-    // renderer's per-instance sampler binding always has a valid texture.
-    book_.appendInstances(instances_, whiteTexture_.handle());
-
-    if (currentScene_ < 0 || currentScene_ >= static_cast<int>(bookData_.scenes.size()))
+void Scene::appendSceneObjects(int sceneIndex, float opacity, std::vector<Instance>& out,
+                              bool logMissing) const {
+    if (sceneIndex < 0 || sceneIndex >= static_cast<int>(bookData_.scenes.size()))
         return;
 
-    const SceneData& scene = bookData_.scenes[currentScene_];
+    const SceneData& scene = bookData_.scenes[sceneIndex];
     for (const ObjectPlacement& obj : scene.objects) {
         auto it = modelByName_.find(obj.model);
         if (it == modelByName_.end()) {
-            SDL_Log("scene '%s': model '%s' not loaded — skipping",
-                    scene.name.c_str(), obj.model.c_str());
+            if (logMissing)
+                SDL_Log("scene '%s': model '%s' not loaded — skipping",
+                        scene.name.c_str(), obj.model.c_str());
             continue;
         }
         const int idx = it->second;
@@ -179,8 +206,80 @@ void Scene::rebuildInstances() {
         const glm::mat4 m = placeOnPage(page, obj.position, obj.rotationDeg, obj.scale,
                                         modelInfos_[idx]);
         for (const GpuSubMesh& sm : models_[idx].submeshes)
-            instances_.push_back({&sm.mesh, m, sm.tint, sm.texture});
+            out.push_back({&sm.mesh, m, sm.tint, sm.texture, opacity, 0.0f});
     }
+}
+
+void Scene::rebuildInstances() {
+    instances_.clear();
+    // Book parts are untextured: stamp them with the shared white texture so the
+    // renderer's per-instance sampler binding always has a valid texture.
+    book_.appendInstances(instances_, whiteTexture_.handle());
+    appendSceneObjects(currentScene_, 1.0f, instances_, /*logMissing=*/true);
+}
+
+void Scene::buildTransitionInstances() {
+    instances_.clear();
+    book_.appendInstances(instances_, whiteTexture_.handle());
+
+    // Cross-fade: the outgoing spread fades out as the incoming one fades in.
+    const float e = pageTurnEase(turn_.t);
+    const float outAlpha = 1.0f - e;
+    const float inAlpha = e;
+    if (outAlpha > 0.02f) appendSceneObjects(turn_.fromScene, outAlpha, instances_, false);
+    if (inAlpha > 0.02f) appendSceneObjects(turn_.toScene, inAlpha, instances_, false);
+
+    // The turning leaf: hinged at the spine, swept by `angle` and bowed by `curv`
+    // (curvature uploaded per-instance and applied in the vertex shader). Opaque,
+    // so it cleanly hides whatever it passes over.
+    const float angle = pageTurnAngleDeg(e, turn_.dir);
+    const float curv = pageTurnCurvature(turn_.t, kCurlMax);
+    instances_.push_back({&book_.leafMesh(), leafTransform(angle, book_.leafHingeY()),
+                          book_.leafColor(), whiteTexture_.handle(), 1.0f, curv});
+}
+
+void Scene::update(float dt) {
+    if (!turn_.active) return;
+
+    turn_.t += dt / turn_.duration;
+    if (turn_.t >= 1.0f) {
+        // Landed: commit the destination spread and drop back to the static path.
+        turn_.t = 1.0f;
+        turn_.active = false;
+        currentScene_ = turn_.toScene;
+        rebuildInstances();
+        return;
+    }
+    buildTransitionInstances();
+}
+
+void Scene::startTurn(int target, int dir) {
+    // Ignore input mid-turn and don't wrap past either end of the book.
+    if (turn_.active) return;
+    if (target < 0 || target >= static_cast<int>(bookData_.scenes.size())) return;
+    if (target == currentScene_) return;
+
+    turn_ = PageTurn{};
+    turn_.active = true;
+    turn_.fromScene = currentScene_;
+    turn_.toScene = target;
+    turn_.dir = dir;
+    turn_.t = 0.0f;
+    buildTransitionInstances(); // show frame 0 immediately
+}
+
+bool Scene::poseTurn(int dir, float t) {
+    const int target = currentScene_ + (dir >= 0 ? 1 : -1);
+    if (target < 0 || target >= static_cast<int>(bookData_.scenes.size())) return false;
+
+    turn_ = PageTurn{};
+    turn_.active = true;
+    turn_.fromScene = currentScene_;
+    turn_.toScene = target;
+    turn_.dir = dir >= 0 ? 1 : -1;
+    turn_.t = std::clamp(t, 0.0f, 1.0f);
+    buildTransitionInstances();
+    return true;
 }
 
 void Scene::setScene(int index) {
@@ -192,14 +291,15 @@ void Scene::setScene(int index) {
     rebuildInstances();
 }
 
-void Scene::nextScene() { setScene(currentScene_ + 1); }
-void Scene::prevScene() { setScene(currentScene_ - 1); }
+void Scene::nextScene() { startTurn(currentScene_ + 1, +1); }
+void Scene::prevScene() { startTurn(currentScene_ - 1, -1); }
 
 const std::string& Scene::currentSceneName() const {
     static const std::string kEmpty;
-    if (currentScene_ < 0 || currentScene_ >= static_cast<int>(bookData_.scenes.size()))
+    const int idx = displayScene(); // lead the title with the turn's destination
+    if (idx < 0 || idx >= static_cast<int>(bookData_.scenes.size()))
         return kEmpty;
-    return bookData_.scenes[currentScene_].name;
+    return bookData_.scenes[idx].name;
 }
 
 void Scene::destroy(SDL_GPUDevice* device) {
@@ -220,6 +320,7 @@ void Scene::destroy(SDL_GPUDevice* device) {
     instances_.clear();
     bookData_ = BookData{};
     currentScene_ = 0;
+    turn_ = PageTurn{};
 }
 
 } // namespace book

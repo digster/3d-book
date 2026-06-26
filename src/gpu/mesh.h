@@ -42,6 +42,15 @@ struct MeshData {
 // (see io/model_loader.h) rather than procedural primitives.
 MeshData makeBox(float width, float height, float depth);
 
+// --- Procedural grid panel generator --------------------------------------
+// A single flat sheet lying in the XZ plane (top normal +Y), used for the
+// turning page leaf. Unlike makeBox, the panel is *hinge-anchored*: its local
+// origin sits at the x=0 edge and it extends to x=width, so a rotation about
+// the local Z axis pivots cleanly around that edge (the book's spine/gutter).
+// It is subdivided into nx*nz cells (nx along x, nz along z) so the vertex
+// shader can bend it into a smooth paper curl. UVs run u=x/width, v=(z+depth/2)/depth.
+MeshData makeGridPanel(float width, float depth, int nx, int nz);
+
 // GPU-resident mesh: vertex buffer + index buffer + index count. Owns its GPU
 // buffers; call destroy() with the owning device before the device is gone.
 class Mesh {
@@ -73,11 +82,18 @@ private:
 // the base-color texture to sample. `texture` is never null at draw time — the
 // book parts and untextured models point at the scene's shared 1x1 white
 // texture, which leaves `color` as the visible color.
+//
+// `opacity` drives the page-turn cross-fade (1 = fully opaque, the default; the
+// renderer feeds it through the fragment alpha). `curl` is the cylindrical-bend
+// curvature applied to this instance's vertices in the vertex shader; it is 0
+// for everything except the turning leaf at the height of a page flip.
 struct Instance {
     const Mesh*    mesh;
     glm::mat4      model;
     glm::vec3      color;
     SDL_GPUTexture* texture = nullptr;
+    float          opacity = 1.0f;
+    float          curl = 0.0f;
 };
 
 } // namespace book

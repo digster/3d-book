@@ -34,10 +34,19 @@ public:
     const PageRect& leftPage() const { return left_; }
     const PageRect& rightPage() const { return right_; }
 
+    // The turning-page leaf: a hinge-anchored subdivided panel (local origin at
+    // the spine, extending out to the page edge) that the Scene rotates about the
+    // spine during a page-turn. Cream like the pages; seated just above the page
+    // surface so a flat leaf doesn't z-fight the page-box tops.
+    const Mesh& leafMesh() const { return leafMesh_; }
+    glm::vec3   leafColor() const;
+    float       leafHingeY() const;
+
 private:
     Mesh coverMesh_;
     Mesh pageMesh_;
     Mesh spineMesh_;
+    Mesh leafMesh_;
     std::vector<Instance> parts_;
     PageRect left_{};
     PageRect right_{};

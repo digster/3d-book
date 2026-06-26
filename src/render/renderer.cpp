@@ -18,11 +18,14 @@ namespace {
 constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 
 // Per-draw uniform block. Layout matches `UBO` in shaders/scene.vert: two mat4s
-// followed by a vec4, all naturally 16-byte aligned (std140-compatible).
+// followed by two vec4s, all naturally 16-byte aligned (std140-compatible).
+// `color.a` carries per-object opacity (the page-turn fade); `turn.x` carries the
+// page-curl curvature (0 for everything but the turning leaf).
 struct VertexUBO {
     glm::mat4 mvp;
     glm::mat4 model;
     glm::vec4 color;
+    glm::vec4 turn;
 };
 
 // Pick the SDL surface pixel format that matches a GPU color format, so a
@@ -98,6 +101,17 @@ bool Renderer::createPipeline() {
 
     SDL_GPUColorTargetDescription colorTarget{};
     colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device_, window_);
+
+    // Standard "over" alpha blending so the page-turn cross-fade can ramp the
+    // staged objects' opacity in/out. Opaque draws (alpha == 1) reduce to the
+    // source color passing straight through, so this is a no-op outside a turn.
+    colorTarget.blend_state.enable_blend = true;
+    colorTarget.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    colorTarget.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    colorTarget.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    colorTarget.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    colorTarget.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    colorTarget.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
 
     SDL_GPUGraphicsPipelineCreateInfo pci{};
     pci.vertex_shader = vs;
@@ -191,7 +205,8 @@ void Renderer::recordScene(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* color,
         VertexUBO ubo;
         ubo.mvp = viewProj * inst.model;
         ubo.model = inst.model;
-        ubo.color = glm::vec4(inst.color, 1.0f);
+        ubo.color = glm::vec4(inst.color, inst.opacity);
+        ubo.turn = glm::vec4(inst.curl, 0.0f, 0.0f, 0.0f);
         SDL_PushGPUVertexUniformData(cmd, 0, &ubo, sizeof(ubo));
 
         // Bind this instance's base-color texture (the shared white texture for

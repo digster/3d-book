@@ -31,3 +31,13 @@ A running log of the prompts that shaped this project.
   header). Layout: a **single `book.json`** with an ordered `scenes` array.
   Positioning: **page-relative `(u,v)` + auto-seat**. The previous random
   placement is **replaced entirely** (purely data-driven).
+
+## 2026-06-25 — Page-turn transition animation
+
+- Implement book-like page turn transition animation when switching between the
+  pages.
+- (clarified with the user) Page fidelity: **curled leaf** — a subdivided page
+  mesh that bends in the vertex shader as it sweeps about the spine (not a rigid
+  board). Objects during the turn: **cross-fade** — the outgoing spread's models
+  fade out and the incoming spread's fade in (enables pipeline alpha blending +
+  per-instance opacity).

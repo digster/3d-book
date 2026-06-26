@@ -16,7 +16,7 @@
 layout(set = 2, binding = 0) uniform sampler2D uBaseColor;
 
 layout(location = 0) in vec3 vNormal;  // world-space normal (not yet normalized)
-layout(location = 1) in vec3 vColor;   // object base color / tint
+layout(location = 1) in vec4 vColor;   // object base color / tint (rgb) + opacity (a)
 layout(location = 2) in vec2 vUV;      // texture coordinate
 
 layout(location = 0) out vec4 outColor;
@@ -38,5 +38,7 @@ void main() {
     float light   = ambient + (1.0 - ambient) * diffuse;
 
     vec4 base = texture(uBaseColor, vUV);       // white (1,1,1,1) when untextured
-    outColor = vec4(base.rgb * vColor * light, 1.0);
+    // Alpha carries the per-object opacity (vColor.a) for the page-turn cross-
+    // fade; it is 1.0 for everything outside a transition.
+    outColor = vec4(base.rgb * vColor.rgb * light, base.a * vColor.a);
 }

@@ -68,6 +68,41 @@ MeshData makeBox(float width, float height, float depth) {
     return m;
 }
 
+// --- Grid panel -----------------------------------------------------------
+MeshData makeGridPanel(float width, float depth, int nx, int nz) {
+    if (nx < 1) nx = 1;
+    if (nz < 1) nz = 1;
+    const float hz = depth * 0.5f;
+    const glm::vec3 n(0.0f, 1.0f, 0.0f); // flat sheet faces +Y before any bend
+
+    MeshData m;
+    // (nx+1) x (nz+1) grid of vertices. x runs 0..width (hinge-anchored at x=0),
+    // z runs -hz..+hz, all at y=0. The vertex shader bends along x at draw time.
+    for (int iz = 0; iz <= nz; ++iz) {
+        const float fz = static_cast<float>(iz) / static_cast<float>(nz);
+        const float z = -hz + fz * depth;
+        for (int ix = 0; ix <= nx; ++ix) {
+            const float fx = static_cast<float>(ix) / static_cast<float>(nx);
+            const float x = fx * width;
+            m.vertices.push_back({glm::vec3(x, 0.0f, z), n, glm::vec2(fx, fz)});
+        }
+    }
+
+    // Two triangles per cell, wound CCW so the +Y normal is the front face.
+    const int stride = nx + 1;
+    for (int iz = 0; iz < nz; ++iz) {
+        for (int ix = 0; ix < nx; ++ix) {
+            const uint32_t a = static_cast<uint32_t>(iz * stride + ix);
+            const uint32_t b = a + 1;
+            const uint32_t c = a + stride;
+            const uint32_t d = c + 1;
+            const uint32_t idx[6] = {a, c, b, b, c, d};
+            m.indices.insert(m.indices.end(), idx, idx + 6);
+        }
+    }
+    return m;
+}
+
 // --- GPU Mesh -------------------------------------------------------------
 Mesh::Mesh(Mesh&& other) noexcept
     : vertexBuffer_(other.vertexBuffer_),

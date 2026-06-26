@@ -23,16 +23,32 @@ constexpr float kPageGap = 0.10f;            // half-gap between the pages (the 
 constexpr float kPageCenterX = kPageW * 0.5f + kPageGap; // 1.10
 constexpr float kPageTopY = kPageH;          // cover top is y=0, so page top = kPageH
 
+// --- Turning-page leaf ----------------------------------------------------
+// Length reaches from the spine (x=0) to the outer page edge; depth matches a
+// page. Hinge sits a hair above the page surface to avoid z-fighting when flat.
+constexpr float kLeafLength = kPageCenterX + kPageW * 0.5f; // 2.10 (spine -> edge)
+constexpr float kLeafDepth = kPageD;
+constexpr float kLeafHingeY = kPageTopY + 0.006f;
+constexpr int   kLeafSegmentsX = 32; // subdivisions along the bend; plenty for a smooth curl
+constexpr int   kLeafSegmentsZ = 1;  // curl is uniform along z, so one row suffices
+
 // --- Colors ---------------------------------------------------------------
 const glm::vec3 kCoverColor(0.40f, 0.22f, 0.14f); // brown leather
 const glm::vec3 kPageColor(0.92f, 0.89f, 0.80f);  // cream paper
 const glm::vec3 kSpineColor(0.28f, 0.15f, 0.09f); // darker binding
+const glm::vec3 kLeafColor(0.96f, 0.94f, 0.86f);  // turning leaf, a touch brighter than the page
 } // namespace
+
+glm::vec3 Book::leafColor() const { return kLeafColor; }
+float Book::leafHingeY() const { return kLeafHingeY; }
 
 bool Book::build(SDL_GPUDevice* device) {
     if (!coverMesh_.upload(device, makeBox(kCoverW, kCoverH, kCoverD))) return false;
     if (!pageMesh_.upload(device, makeBox(kPageW, kPageH, kPageD))) return false;
     if (!spineMesh_.upload(device, makeBox(kSpineW, kSpineH, kSpineD))) return false;
+    if (!leafMesh_.upload(device,
+            makeGridPanel(kLeafLength, kLeafDepth, kLeafSegmentsX, kLeafSegmentsZ)))
+        return false;
 
     auto translate = [](glm::vec3 p) { return glm::translate(glm::mat4(1.0f), p); };
 
@@ -62,6 +78,7 @@ void Book::destroy(SDL_GPUDevice* device) {
     coverMesh_.destroy(device);
     pageMesh_.destroy(device);
     spineMesh_.destroy(device);
+    leafMesh_.destroy(device);
     parts_.clear();
 }
 

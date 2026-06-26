@@ -7,7 +7,9 @@ two facing pages are a flat "staging area" onto which the app places **external
 
 What goes where is **data-driven**: a `book.json` file describes an ordered list
 of **scenes** (page spreads), each placing named models at specific positions on
-the left/right pages. You flip between scenes like turning pages in a book.
+the left/right pages. Flipping between scenes plays a **book-like page-turn
+animation**: a leaf lifts and curls about the spine while the staged models
+cross-fade from the old spread to the new one.
 
 It is built on **SDL3** and its modern **`SDL_GPU`** API (which backends onto
 Metal on macOS), with **GLM** for math and **SDL_shadercross** to turn one set
@@ -23,9 +25,14 @@ and scene loading use four vendored single-header libraries — **tinyobjloader*
 | --------------------------- | -------------------------------------------- |
 | Left-drag                   | Orbit the camera around the book             |
 | Scroll wheel                | Zoom in / out (orthographic scale)           |
-| `→` / `PageDown`            | Flip to the next scene (page spread)         |
-| `←` / `PageUp`              | Flip to the previous scene                   |
+| `→` / `PageDown`            | Turn to the next scene (animated page flip)  |
+| `←` / `PageUp`              | Turn to the previous scene                   |
 | `Esc` / close               | Quit                                         |
+
+Each flip plays a ~0.6 s page-turn: a cream **leaf** hinged at the spine sweeps
+up and over (bending like real paper) while the outgoing spread's models fade out
+and the incoming spread's fade in. Input during a turn is ignored until it
+settles, and flipping past either end is a no-op (a real book doesn't wrap).
 
 The window title shows the current scene's name and position, e.g.
 `3d-book — Spread 2 — Corners (2/3)`.
@@ -118,7 +125,8 @@ Useful extras:
 ./build/3d_book --screenshot out.bmp      # render one frame to a BMP and exit
 ./build/3d_book --scene path/to/book.json # load a specific scene file
 ./build/3d_book --scene-index 1           # open on spread N (0-based; clamped)
-ctest --test-dir build                    # geometry / camera / scene-loader unit tests
+./build/3d_book --turn-preview 0.5        # freeze a forward page-turn at t∈[0,1] (pairs with --screenshot)
+ctest --test-dir build                    # geometry / camera / page-turn / scene-loader unit tests
 ```
 
 `--screenshot` renders a single frame to an offscreen texture and saves it with
@@ -143,7 +151,12 @@ SDL's built-in BMP writer — no screen-recording permission needed. Convert wit
   registry keyed by filename, parses `book.json` (`src/io/scene_loader.cpp`) into
   a list of spreads, and — for the current spread — seats each authored object on
   its page (`placeOnPage`), handing every sub-mesh to the renderer as an instance.
-  Flipping scenes just re-selects which spread feeds the instance list.
+- The **page-turn** is a timed transition owned by the scene. While it runs, the
+  instance list is rebuilt each frame from the book, the two spreads (cross-faded
+  by per-instance opacity), and a hinge-anchored **leaf** mesh (`makeGridPanel`)
+  rotated about the spine. The leaf's paper **curl** is a per-vertex cylindrical
+  bend done in `scene.vert` from a curvature uniform, so the CPU only uploads one
+  scalar per draw. The main loop feeds a clamped delta-time into `Scene::update`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 

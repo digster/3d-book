@@ -138,6 +138,68 @@ static void testScenePlacement() {
     CHECK(a == b);
 }
 
+static void testPageTurn() {
+    // --- Easing: pinned at the ends, symmetric, monotonic. ---
+    CHECK(std::fabs(pageTurnEase(0.0f) - 0.0f) < 1e-6f);
+    CHECK(std::fabs(pageTurnEase(1.0f) - 1.0f) < 1e-6f);
+    CHECK(std::fabs(pageTurnEase(0.5f) - 0.5f) < 1e-6f);
+    CHECK(pageTurnEase(0.25f) < 0.25f);   // eases in (slower than linear early)
+    CHECK(pageTurnEase(0.75f) > 0.75f);   // eases out (faster than linear late)
+    // Out-of-range progress is clamped, not extrapolated.
+    CHECK(std::fabs(pageTurnEase(-1.0f) - 0.0f) < 1e-6f);
+    CHECK(std::fabs(pageTurnEase(2.0f) - 1.0f) < 1e-6f);
+
+    // --- Sweep angle: forward 0->180, backward the mirror. ---
+    CHECK(std::fabs(pageTurnAngleDeg(0.0f, +1) - 0.0f) < 1e-4f);
+    CHECK(std::fabs(pageTurnAngleDeg(1.0f, +1) - 180.0f) < 1e-4f);
+    CHECK(std::fabs(pageTurnAngleDeg(0.0f, -1) - 180.0f) < 1e-4f);
+    CHECK(std::fabs(pageTurnAngleDeg(1.0f, -1) - 0.0f) < 1e-4f);
+    // At the midpoint both directions stand the leaf straight up (90deg).
+    CHECK(std::fabs(pageTurnAngleDeg(0.5f, +1) - 90.0f) < 1e-4f);
+    CHECK(std::fabs(pageTurnAngleDeg(0.5f, -1) - 90.0f) < 1e-4f);
+
+    // --- Curl: flat at the ends, peaks at mid-turn. ---
+    const float kMax = 0.5f;
+    CHECK(std::fabs(pageTurnCurvature(0.0f, kMax)) < 1e-6f);
+    CHECK(std::fabs(pageTurnCurvature(1.0f, kMax)) < 1e-6f);
+    CHECK(std::fabs(pageTurnCurvature(0.5f, kMax) - kMax) < 1e-5f);
+    CHECK(pageTurnCurvature(0.25f, kMax) > 0.0f &&
+          pageTurnCurvature(0.25f, kMax) < kMax);
+
+    // --- Leaf transform: hinge edge stays pinned to the gutter at every angle. ---
+    const float hingeY = 0.226f;
+    for (float a : {0.0f, 45.0f, 90.0f, 135.0f, 180.0f}) {
+        glm::mat4 m = leafTransform(a, hingeY);
+        CHECK(finite4x4(m));
+        glm::vec4 hinge = m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f); // local origin = hinge edge
+        CHECK(std::fabs(hinge.x - 0.0f) < 1e-5f);
+        CHECK(std::fabs(hinge.y - hingeY) < 1e-5f);
+        CHECK(std::fabs(hinge.z - 0.0f) < 1e-5f);
+    }
+    // A 90deg turn stands a free-edge point straight up above the hinge.
+    {
+        const float L = 2.1f;
+        glm::vec4 tip = leafTransform(90.0f, hingeY) * glm::vec4(L, 0.0f, 0.0f, 1.0f);
+        CHECK(std::fabs(tip.x - 0.0f) < 1e-4f);
+        CHECK(std::fabs(tip.y - (hingeY + L)) < 1e-4f);
+    }
+
+    // --- Leaf mesh: valid, hinge-anchored along +X, fully subdivided. ---
+    const int nx = 32, nz = 1;
+    MeshData leaf = makeGridPanel(2.1f, 3.0f, nx, nz);
+    checkMeshValid(leaf, "leaf");
+    CHECK(leaf.vertices.size() == static_cast<size_t>((nx + 1) * (nz + 1)));
+    float minX = leaf.vertices[0].pos.x, maxX = minX;
+    for (const Vertex& v : leaf.vertices) {
+        minX = std::min(minX, v.pos.x);
+        maxX = std::max(maxX, v.pos.x);
+        CHECK(std::fabs(v.pos.y) < 1e-6f);          // flat sheet before bending
+        CHECK(v.normal.y > 0.9f);                   // faces +Y
+    }
+    CHECK(std::fabs(minX - 0.0f) < 1e-6f);          // origin anchored at the hinge edge
+    CHECK(std::fabs(maxX - 2.1f) < 1e-5f);          // extends to the page edge
+}
+
 static void testSceneLoader() {
     // A well-formed book with two scenes exercising required + optional fields.
     const std::string good = R"({
@@ -283,6 +345,7 @@ int main() {
     testBoxGenerator();
     testCamera();
     testScenePlacement();
+    testPageTurn();
     testSceneLoader();
     testLoaders();
 
